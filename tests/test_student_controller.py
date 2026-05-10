@@ -41,15 +41,6 @@ class StudentControllerTest(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_get_all_students_returns_200_with_list(self):
-        # INJECTED: Stateful marker-file flakiness (E8 Flask)
-        import os as _os
-        _flask_marker = "/tmp/flaky_marker_flask.tmp"
-        if not _os.path.exists(_flask_marker):
-            open(_flask_marker, "w").close()
-            raise RuntimeError(
-                "Simulated transient failure: cold-start instability detected (Flask E8)"
-            )
-        # END INJECTED
         """getAllStudents_shouldReturn200WithStudentList"""
         s1 = _make_student(1, "Alice", 8.5)
         s2 = _make_student(2, "Bob", 6.0)
