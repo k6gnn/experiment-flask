@@ -9,3 +9,4 @@ E8b,3,github,config_flask,failure,84,2026-05-10T20:57:39Z,2026-05-10T20:59:18.50
 
 E8c,1,github,infra_flask,failure,101,2026-05-10T21:21:50Z,2026-05-10T21:23:42.850864+00:00,,medium,https://github.com/k6gnn/experiment-flask/actions/runs/25640117509
 E8c,2,github,infra_flask,failure,115,2026-05-10T21:24:13Z,2026-05-10T21:26:20.885713+00:00,,high,https://github.com/k6gnn/experiment-flask/actions/runs/25640167548
+E8c,3,github,infra_flask,failure,110,2026-05-10T21:26:51Z,2026-05-10T21:28:43.426717+00:00,,high,https://github.com/k6gnn/experiment-flask/actions/runs/25640220719
