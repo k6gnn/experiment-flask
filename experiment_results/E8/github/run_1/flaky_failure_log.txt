@@ -1,0 +1,5 @@
+ATTEMPT_FAILED at 17:13:08 (exit_code=1)
+tests/test_student_controller.py::StudentControllerTest::test_get_all_students_returns_200_with_list FAILED [ 42%]
+    raise RuntimeError(
+E   RuntimeError: Simulated transient failure: cold-start instability detected (Flask E8)
+FAILED tests/test_student_controller.py::StudentControllerTest::test_get_all_students_returns_200_with_list - RuntimeError: Simulated transient failure: cold-start instability detected (Flask E8)
