@@ -1,0 +1,10 @@
+# Core application
+Flask>=3.1.0
+
+# Flask-SQLAlchemy kept for M8 configuration validation gate compatibility
+# (M8 checks that Flask-SQLAlchemy is present in requirements.txt)
+Flask-SQLAlchemy>=3.1.0
+
+# Testing
+pytest>=8.0.0
+pytest-cov>=6.0.0

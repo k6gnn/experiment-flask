@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "grade-management"
+version = "1.0.0"
+description = "Grade Management REST API — Python Flask equivalent"
+requires-python = ">=3.11"
+dependencies = [
+    "Flask==3.1.0",
+    "Flask-SQLAlchemy==3.1.1",
+    "Flask-Marshmallow==1.2.1",
+    "marshmallow-sqlalchemy==1.4.2",
+    "marshmallow==3.26.1",
+    "SQLAlchemy==2.0.40",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==8.3.5",
+    "pytest-cov==6.1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

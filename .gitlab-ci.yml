@@ -1,0 +1,468 @@
+# -----------------------------------------------------------------------------
+# GitLab CI/CD Pipeline with Self-Healing Mechanisms M1-M14
+# Python Flask equivalent of the original Java Spring Boot pipeline.
+#
+# M14 runs first as a warning-only proactive risk predictor.
+# M13 runs last with when: always as an ML-based post-pipeline failure classifier.
+# -----------------------------------------------------------------------------
+
+variables:
+  PYTHON_VERSION: "3.11"
+  APP_NAME: "grade-management"
+  BUILD_TIMEOUT_MINUTES: "10"
+  TEST_TIMEOUT_MINUTES: "10"
+  MAX_RETRIES: "2"
+  M14_THRESHOLD_MODE: "balanced"
+  M14_MODE: "warning_only"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+stages:
+  - risk-assessment   # M14
+  - pre-pipeline      # M9, M8
+  - build             # M1, M2, M3, M11
+  - test              # M4, M5, M6
+  - package           # M10, M12
+  - deploy            # M7, M12
+  - post-pipeline     # M13
+
+.pip_cache:
+  cache:
+    key:
+      files:
+        - requirements.txt
+    paths:
+      - .cache/pip
+    policy: pull-push
+
+# =============================================================================
+# M14 - Proactive Failure Risk Assessment
+# Runs before the normal pipeline. Warning-only: never blocks experiment runs.
+# =============================================================================
+m14-risk-assessment:
+  stage: risk-assessment
+  image: python:3.11-slim
+  timeout: 5 minutes
+  allow_failure: true
+  script:
+    - |
+      echo "=== M14: Proactive Failure Risk Assessment ==="
+      python -m pip install --upgrade pip -q
+      pip install -q numpy scikit-learn joblib requests
+
+      if [ ! -f "scripts/m14_predict.py" ] || [ ! -f "models/m14_model.pkl" ] || [ ! -f "models/m14_config.pkl" ]; then
+        echo "WARNING: M14 model files not found - skipping prediction (warning-only mode)"
+        echo '{"status":"skipped","reason":"model_files_not_found","risk_score":0,"risk_level":"unknown","warning":false}' > m14_risk_report.json
+        cat m14_risk_report.json
+        exit 0
+      fi
+
+      python scripts/m14_predict.py \
+        --platform gitlab \
+        --repository "$CI_PROJECT_PATH" \
+        --commit "$CI_COMMIT_SHA" \
+        --branch "$CI_COMMIT_REF_NAME" \
+        --event "$CI_PIPELINE_SOURCE" \
+        --model models/m14_model.pkl \
+        --config models/m14_config.pkl \
+        --output m14_risk_report.json
+
+      cat m14_risk_report.json
+  artifacts:
+    name: "m14-risk-report-$CI_PIPELINE_IID"
+    when: always
+    expire_in: 30 days
+    paths:
+      - m14_risk_report.json
+
+# =============================================================================
+# M9 - Environment Variable Verification
+# =============================================================================
+environment-verification:
+  stage: pre-pipeline
+  image: ubuntu:22.04
+  timeout: 2 minutes
+  needs:
+    - job: m14-risk-assessment
+      optional: true
+  script:
+    - |
+      echo "=== M9 Environment Variable Verification ==="
+
+      check_var() {
+        name="$1"
+        value="$2"
+        if [ -z "$value" ]; then
+          echo "MISSING: $name"
+          return 1
+        else
+          echo "OK: $name = $value"
+          return 0
+        fi
+      }
+
+      MISSING=0
+      check_var "PYTHON_VERSION"        "$PYTHON_VERSION"        || MISSING=$((MISSING+1))
+      check_var "APP_NAME"              "$APP_NAME"              || MISSING=$((MISSING+1))
+      check_var "BUILD_TIMEOUT_MINUTES" "$BUILD_TIMEOUT_MINUTES" || MISSING=$((MISSING+1))
+      check_var "TEST_TIMEOUT_MINUTES"  "$TEST_TIMEOUT_MINUTES"  || MISSING=$((MISSING+1))
+
+      if [ "$MISSING" -gt 0 ]; then
+        echo "FAILURE: $MISSING required variable(s) are missing."
+        exit 1
+      fi
+
+      echo "All environment variables verified successfully."
+
+# =============================================================================
+# M8 - Configuration Validation Gate
+# =============================================================================
+configuration-validation:
+  stage: pre-pipeline
+  image: ubuntu:22.04
+  timeout: 2 minutes
+  needs: [environment-verification]
+  script:
+    - |
+      echo "=== M8 Configuration Validation Gate ==="
+
+      echo "--- Validating requirements.txt ---"
+      if [ ! -f "requirements.txt" ]; then
+        echo "FAILURE: requirements.txt not found"
+        exit 1
+      fi
+
+      for pkg in "Flask" "Flask-SQLAlchemy" "marshmallow" "pytest"; do
+        if grep -qi "^${pkg}" requirements.txt; then
+          echo "OK: $pkg found in requirements.txt"
+        else
+          echo "FAILURE: $pkg missing from requirements.txt"
+          exit 1
+        fi
+      done
+
+      echo "--- Validating app/__init__.py configuration ---"
+      if [ ! -f "app/__init__.py" ]; then
+        echo "FAILURE: app/__init__.py not found"
+        exit 1
+      fi
+
+      for key in "SQLALCHEMY_DATABASE_URI" "APP_NAME" "SERVER_PORT"; do
+        if grep -q "$key" app/__init__.py; then
+          echo "OK: $key found in app config"
+        else
+          echo "FAILURE: Required config key '$key' missing"
+          exit 1
+        fi
+      done
+
+      echo "Configuration validation passed."
+
+# =============================================================================
+# Build - M1, M2, M3, M11
+# =============================================================================
+build:
+  stage: build
+  image: python:3.11-slim
+  timeout: 10 minutes
+  needs: [configuration-validation]
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
+  cache:
+    key:
+      files:
+        - requirements.txt
+    paths:
+      - .cache/pip
+    policy: pull-push
+  script:
+    - |
+      echo "=== Stage 1: Build ==="
+
+      # M11 - Cache detection
+      if [ -d ".cache/pip" ]; then
+        echo "M11: Cache present - using cached dependencies"
+      else
+        echo "M11: Cache absent - downloading fresh dependencies"
+      fi
+
+      python -m pip install --upgrade pip > build.log 2>&1
+      pip install -r requirements.txt >> build.log 2>&1 || {
+        EXIT_CODE=$?
+        echo "M2: Primary install failed, attempting fallback install without version pins..."
+        pip install Flask Flask-SQLAlchemy Flask-Marshmallow marshmallow-sqlalchemy pytest pytest-cov >> build.log 2>&1
+        EXIT_CODE=$?
+        cat build.log
+        exit $EXIT_CODE
+      }
+
+      # Verify imports
+      python -c "from app import create_app; app = create_app(); print('OK: app factory loaded')" >> build.log 2>&1 || {
+        EXIT_CODE=$?
+        cat build.log
+        exit $EXIT_CODE
+      }
+
+      cat build.log
+      echo "Build completed successfully."
+  after_script:
+    - |
+      if [ "$CI_JOB_STATUS" = "failed" ]; then
+        echo "=== M3: Build Failure Notification ==="
+        echo "Branch:   $CI_COMMIT_REF_NAME"
+        echo "Commit:   $CI_COMMIT_SHA"
+        echo "Author:   $CI_COMMIT_AUTHOR"
+        echo "Pipeline: $CI_PIPELINE_URL"
+        echo "ACTION REQUIRED: Build failed after retries."
+      fi
+  artifacts:
+    name: "build-log-$CI_PIPELINE_IID"
+    when: always
+    expire_in: 30 days
+    paths:
+      - build.log
+
+# =============================================================================
+# Test - M4, M5, M6
+# =============================================================================
+test:
+  stage: test
+  image: python:3.11-slim
+  timeout: 10 minutes
+  needs: [build]
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  cache:
+    key:
+      files:
+        - requirements.txt
+    paths:
+      - .cache/pip
+    policy: pull-push
+  script:
+    - |
+      echo "=== Stage 2: Test ==="
+      pip install -r requirements.txt -q
+
+      mkdir -p test-results
+
+      python -m pytest tests/ \
+        --tb=short \
+        --junitxml=test-results/junit.xml \
+        -v > test.log 2>&1 || {
+        EXIT_CODE=$?
+        TIMESTAMP=$(date -u +%H:%M:%S)
+        echo "ATTEMPT_FAILED at $TIMESTAMP (exit_code=$EXIT_CODE)" >> flaky_failure_log.txt
+        grep -h "FAILED\|ERROR\|Exception\|AssertionError" test.log 2>/dev/null \
+          >> flaky_failure_log.txt || true
+        cat test.log
+        exit $EXIT_CODE
+      }
+
+      cat test.log
+      # Ensure flaky log always exists for artifact upload
+      touch flaky_failure_log.txt
+  after_script:
+    - |
+      echo "=== M5: Flaky Test Quarantine Analysis ==="
+      JUNIT="test-results/junit.xml"
+      FLAG_FILE="flaky_failure_log.txt"
+
+      if [ -f "$FLAG_FILE" ] && [ -s "$FLAG_FILE" ] && [ -f "$JUNIT" ]; then
+        echo "M5: FLAKY TEST DETECTED"
+        cat "$FLAG_FILE"
+        echo "Classification: FLAKY CANDIDATE"
+        echo "Recommended action: quarantine the failing test from the critical path."
+      elif [ -f "$FLAG_FILE" ] && [ -s "$FLAG_FILE" ]; then
+        echo "M5: TEST FAILURES DETECTED (deterministic - not flaky)"
+        cat "$FLAG_FILE"
+      else
+        echo "M5: All tests passed - no flaky test candidates detected"
+      fi
+
+      echo "=== M6: Test Result Trend Analysis ==="
+      if [ -f "$JUNIT" ]; then
+        python3 -c "
+      import xml.etree.ElementTree as ET
+      try:
+          tree = ET.parse('$JUNIT')
+          root = tree.getroot()
+          suite = root if root.tag == 'testsuite' else root.find('testsuite')
+          if suite is None: suite = root
+          total  = int(suite.get('tests', 0))
+          failed = int(suite.get('failures', 0))
+          errors = int(suite.get('errors', 0))
+          passed = total - failed - errors
+          print(f'Tests run: {total} | Passed: {passed} | Failed: {failed} | Errors: {errors}')
+          if failed > 0 or errors > 0:
+              print('TREND ALERT: Test failures detected.')
+          else:
+              print('TREND OK: All tests passed in this run.')
+      except Exception as e:
+          print(f'Could not parse JUnit XML: {e}')
+      " || true
+      else
+        echo "No JUnit report found - check test.log"
+      fi
+  artifacts:
+    name: "test-reports-$CI_PIPELINE_IID"
+    when: always
+    expire_in: 30 days
+    paths:
+      - test-results/
+      - flaky_failure_log.txt
+      - test.log
+
+# =============================================================================
+# Package - M10, M12
+# =============================================================================
+package:
+  stage: package
+  image: python:3.11-slim
+  timeout: 5 minutes
+  needs:
+    - job: test
+      artifacts: true
+  cache:
+    key:
+      files:
+        - requirements.txt
+    paths:
+      - .cache/pip
+    policy: pull-push
+  script:
+    - |
+      echo "=== Stage 3: Package ==="
+      pip install build wheel -q
+
+      python -m build --wheel --outdir dist/
+
+      WHEEL=$(find dist -name "*.whl" | head -1)
+      if [ -z "$WHEEL" ]; then
+        echo "FAILURE: No wheel artifact found in dist/"
+        exit 1
+      fi
+      echo "Wheel artifact produced: $WHEEL"
+      ls -lh "$WHEEL"
+  artifacts:
+    name: "wheel-$CI_PIPELINE_IID"
+    when: always
+    expire_in: 30 days
+    paths:
+      - dist/*.whl
+
+# =============================================================================
+# Deploy - M7, M12
+# Only runs on pushes to main.
+# =============================================================================
+deploy:
+  stage: deploy
+  image: python:3.11-slim
+  timeout: 5 minutes
+  needs:
+    - job: package
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    - when: never
+  script:
+    - |
+      echo "=== Stage 4: Deploy ==="
+      WHEEL=$(find dist -name "*.whl" | head -1)
+      echo "Deploying artifact: $WHEEL"
+      echo "Pipeline: $CI_PIPELINE_IID"
+      echo "Commit:   $CI_COMMIT_SHA"
+      echo "Deployment successful."
+  after_script:
+    - |
+      if [ "$CI_JOB_STATUS" = "failed" ]; then
+        echo "=== M7: Automated Rollback Initiated ==="
+        echo "Deployment failed. In production this would revert to the last known good state."
+        git log --oneline -5 || true
+      fi
+
+# =============================================================================
+# M13 - ML Failure Classification
+# Runs regardless of prior failures. Consumes build/test logs and status metadata.
+# =============================================================================
+anomaly-detection:
+  stage: post-pipeline
+  image: python:3.11-slim
+  timeout: 5 minutes
+  when: always
+  needs:
+    - job: m14-risk-assessment
+      artifacts: true
+      optional: true
+    - job: build
+      artifacts: true
+      optional: true
+    - job: test
+      artifacts: true
+      optional: true
+    - job: package
+      artifacts: true
+      optional: true
+  script:
+    - |
+      echo "=== M13: ML Failure Classification ==="
+      python -m pip install --upgrade pip -q
+      pip install -q pandas numpy scikit-learn joblib
+
+      mkdir -p logs
+      [ -f build.log ]             && cp build.log             logs/build.log             || true
+      [ -f test.log ]              && cp test.log              logs/test.log              || true
+      [ -f flaky_failure_log.txt ] && cp flaky_failure_log.txt logs/flaky_failure_log.txt || true
+
+      python3 -c "
+      import json, os
+      d = {
+        'platform':     'gitlab',
+        'project_path': os.getenv('CI_PROJECT_PATH'),
+        'project_id':   os.getenv('CI_PROJECT_ID'),
+        'pipeline_id':  os.getenv('CI_PIPELINE_ID'),
+        'pipeline_iid': os.getenv('CI_PIPELINE_IID'),
+        'pipeline_url': os.getenv('CI_PIPELINE_URL'),
+        'commit':       os.getenv('CI_COMMIT_SHA'),
+        'branch':       os.getenv('CI_COMMIT_REF_NAME'),
+        'source':       os.getenv('CI_PIPELINE_SOURCE'),
+      }
+      open('pipeline_status.json', 'w').write(json.dumps(d, indent=2))
+      "
+
+      cat pipeline_status.json
+
+      if [ ! -f "scripts/m13_predict.py" ] || [ ! -f "models/m13_model_bundle.pkl" ]; then
+        echo "WARNING: M13 model files not found - skipping ML classification"
+        echo '{"status":"skipped","reason":"model_files_not_found"}' > m13_classification_report.json
+        cat m13_classification_report.json
+        exit 0
+      fi
+
+      python scripts/m13_predict.py \
+        --status pipeline_status.json \
+        --logs logs \
+        --model-bundle models/m13_model_bundle.pkl \
+        --output m13_classification_report.json
+
+      cat m13_classification_report.json
+
+      # Ensure m14 report exists for re-upload even if upstream job was skipped
+      [ -f m14_risk_report.json ] || echo '{"status":"not_available"}' > m14_risk_report.json
+  artifacts:
+    name: "m13-classification-report-$CI_PIPELINE_IID"
+    when: always
+    expire_in: 30 days
+    paths:
+      - m13_classification_report.json
+      - pipeline_status.json
+      - m14_risk_report.json
+      - logs/
