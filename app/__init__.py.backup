@@ -45,8 +45,7 @@ def create_app(config_object=None):
 
     # Default configuration (mirrors application.properties / Spring defaults)
     app.config["APP_NAME"] = "grade-management"
-    # INJECTED E8b: port config key renamed — M8 gate will fail
-    app.config["INJECTED_MISSING_PORT"] = 5000
+    app.config["SERVER_PORT"] = 5000
     app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["SQLALCHEMY_ECHO"] = False
