@@ -791,11 +791,29 @@ def inject_all():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def restore_all():
-    """Restores all injected files to their original state from backups."""
+    """Restores all injected files to their original state from backups.
+
+    Skips files that do not exist in the current repository — this lets the
+    same inject_failure.py work from both the Java repo and the Flask repo
+    without printing noise about files that simply are not present.
+    """
     print("\n[RESTORE] Restoring all files to original state...")
-    files = [CONTROLLER, CONTROLLER_TEST, SERVICE_TEST, INFRA_SIMULATOR, FLASK_CONTROLLER_TEST, FLASK_APP_INIT, FLASK_REQUIREMENTS, APP_PROPS, POM_XML, JVM_CONFIG]
-    for f in files:
-        restore(f)
+
+    java_files  = [CONTROLLER, CONTROLLER_TEST, SERVICE_TEST, INFRA_SIMULATOR,
+                   APP_PROPS, POM_XML, JVM_CONFIG]
+    flask_files = [FLASK_CONTROLLER_TEST, FLASK_APP_INIT, FLASK_REQUIREMENTS]
+
+    import os as _os
+    restored_any = False
+    for f in java_files + flask_files:
+        backup_path = f + BACKUP_SUFFIX
+        # Only attempt restore if the file or its backup actually exists here
+        if _os.path.exists(f) or _os.path.exists(backup_path):
+            restore(f)
+            restored_any = True
+
+    if not restored_any:
+        print("  Nothing to restore — no backups found.")
     print("\nAll files restored. Pipeline is back to clean baseline.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
