@@ -7,18 +7,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-# ─────────────────────────────────────────────
-# PERMISSIONS
-# Required by M14 to read workflow history and commit metadata.
-# ─────────────────────────────────────────────
 permissions:
   contents: read
   actions: read
 
-# ─────────────────────────────────────────────
-# ENVIRONMENT VARIABLES
-# Used by Mechanism 9: Environment Variable Verification
-# ─────────────────────────────────────────────
 env:
   PYTHON_VERSION: '3.11'
   APP_NAME: 'grade-management'
@@ -30,17 +22,6 @@ env:
 
 jobs:
 
-  # ═══════════════════════════════════════════
-  # MECHANISM 14: Proactive Failure Risk Assessment
-  # Runs before the actual pipeline stages. It predicts
-  # whether this run is risky based on previous pipeline
-  # history, workflow metadata, commit/change metadata,
-  # and optional previous M13 failure labels.
-  #
-  # Important: this is WARNING-ONLY mode. M14 does not
-  # block the pipeline, because the experiment still needs
-  # build/test/package logs for M13 and metric collection.
-  # ═══════════════════════════════════════════
   m14-risk-assessment:
     name: "M14 — Proactive Failure Risk Assessment"
     runs-on: ubuntu-latest
@@ -74,9 +55,8 @@ jobs:
           M14_MODE: 'warning_only'
         run: |
           echo "=== M14: Proactive Failure Risk Assessment ==="
-
           if [ ! -f "scripts/m14_predict.py" ] || [ ! -f "models/m14_model.pkl" ] || [ ! -f "models/m14_config.pkl" ]; then
-            echo "WARNING: M14 model files not found - skipping prediction (warning-only mode)"
+            echo "WARNING: M14 model files not found - skipping (warning-only mode)"
             echo '{"status":"skipped","reason":"model_files_not_found","risk_score":0,"risk_level":"unknown","warning":false}' > m14_risk_report.json
           else
             python scripts/m14_predict.py \
@@ -89,13 +69,10 @@ jobs:
               --config models/m14_config.pkl \
               --output m14_risk_report.json
           fi
-
           cat m14_risk_report.json
-
           WARNING=$(python -c "import json; print(str(json.load(open('m14_risk_report.json')).get('warning', False)).lower())")
           SCORE=$(python -c "import json; print(json.load(open('m14_risk_report.json')).get('risk_score', 0))")
           LEVEL=$(python -c "import json; print(json.load(open('m14_risk_report.json')).get('risk_level', 'unknown'))")
-
           echo "warning=$WARNING" >> "$GITHUB_OUTPUT"
           echo "risk_score=$SCORE" >> "$GITHUB_OUTPUT"
           echo "risk_level=$LEVEL" >> "$GITHUB_OUTPUT"
@@ -108,12 +85,6 @@ jobs:
           path: m14_risk_report.json
           retention-days: 30
 
-  # ═══════════════════════════════════════════
-  # MECHANISM 9: Environment Variable Verification
-  # Runs before anything else. Checks that all
-  # required environment variables are present
-  # and correctly formatted.
-  # ═══════════════════════════════════════════
   environment-verification:
     name: "M9 — Environment Variable Verification"
     runs-on: ubuntu-latest
@@ -124,38 +95,21 @@ jobs:
         run: |
           echo "=== Environment Variable Verification ==="
           MISSING=""
-
           check_var() {
-            local name=$1
-            local value=$2
-            if [ -z "$value" ]; then
-              echo "MISSING: $name"
-              MISSING="$MISSING $name"
-            else
-              echo "OK: $name = $value"
-            fi
+            local name=$1 value=$2
+            if [ -z "$value" ]; then echo "MISSING: $name"; MISSING="$MISSING $name"
+            else echo "OK: $name = $value"; fi
           }
-
           check_var "PYTHON_VERSION"        "${{ env.PYTHON_VERSION }}"
           check_var "APP_NAME"              "${{ env.APP_NAME }}"
           check_var "BUILD_TIMEOUT_MINUTES" "${{ env.BUILD_TIMEOUT_MINUTES }}"
           check_var "TEST_TIMEOUT_MINUTES"  "${{ env.TEST_TIMEOUT_MINUTES }}"
-
           if [ -n "$MISSING" ]; then
-            echo ""
-            echo "FAILURE: The following required variables are missing or empty: $MISSING"
-            echo "Please check the env section of the workflow file."
+            echo "FAILURE: Required variables missing: $MISSING"
             exit 1
           fi
-
-          echo ""
           echo "All environment variables verified successfully."
 
-  # ═══════════════════════════════════════════
-  # MECHANISM 8: Configuration Validation Gate
-  # Validates requirements.txt and app config
-  # before the pipeline executes its first stage.
-  # ═══════════════════════════════════════════
   configuration-validation:
     name: "M8 — Configuration Validation Gate"
     runs-on: ubuntu-latest
@@ -167,51 +121,47 @@ jobs:
 
       - name: Validate requirements.txt structure
         run: |
-          echo "=== Validating requirements.txt ==="
+          echo "=== Validating requirements.txt ===" | tee -a config_validation.log
           if [ ! -f "requirements.txt" ]; then
-            echo "FAILURE: requirements.txt not found at repository root"
+            echo "FAILURE: requirements.txt not found at repository root" | tee -a config_validation.log
             exit 1
           fi
-
           for pkg in "Flask" "Flask-SQLAlchemy" "pytest"; do
             if grep -qi "^${pkg}" requirements.txt; then
-              echo "OK: $pkg found in requirements.txt"
+              echo "OK: $pkg found in requirements.txt" | tee -a config_validation.log
             else
-              echo "FAILURE: $pkg missing from requirements.txt"
+              echo "FAILURE: $pkg missing from requirements.txt" | tee -a config_validation.log
               exit 1
             fi
           done
-
-          echo "requirements.txt validation passed."
+          echo "requirements.txt validation passed." | tee -a config_validation.log
 
       - name: Validate app configuration
         run: |
-          echo "=== Validating app/__init__.py configuration ==="
-
+          echo "=== Validating app/__init__.py configuration ===" | tee -a config_validation.log
           if [ ! -f "app/__init__.py" ]; then
-            echo "FAILURE: app/__init__.py not found"
+            echo "FAILURE: app/__init__.py not found" | tee -a config_validation.log
             exit 1
           fi
-
           for key in "SQLALCHEMY_DATABASE_URI" "APP_NAME" "SERVER_PORT"; do
             if grep -q "$key" app/__init__.py; then
-              echo "OK: $key found in app config"
+              echo "OK: $key found in app config" | tee -a config_validation.log
             else
-              echo "FAILURE: Required config key '$key' missing from app/__init__.py"
+              echo "FAILURE: Required config key '$key' missing from app/__init__.py" | tee -a config_validation.log
               exit 1
             fi
           done
+          echo "Configuration validation passed." | tee -a config_validation.log
 
-          echo "Configuration validation passed."
+      - name: Upload config validation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-validation-log-${{ github.run_number }}
+          path: config_validation.log
+          if-no-files-found: ignore
+          retention-days: 30
 
-  # ═══════════════════════════════════════════
-  # STAGE 1: BUILD
-  # Mechanisms active:
-  #   M1 — Automated retry on transient build errors
-  #   M2 — Dependency version pinning with fallback
-  #   M3 — Automated notification and branch lockout
-  #   M11 — Dependency cache invalidation and rebuild
-  # ═══════════════════════════════════════════
   build:
     name: "Stage 1 — Build"
     runs-on: ubuntu-latest
@@ -227,15 +177,13 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # M11 — Dependency cache invalidation and rebuild
-      - name: Cache pip dependencies
+      - name: Cache pip dependencies (M11)
         uses: actions/cache@v4
         id: pip-cache
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          restore-keys: ${{ runner.os }}-pip-
 
       - name: Report cache status
         run: |
@@ -245,8 +193,6 @@ jobs:
             echo "M11: Cache miss — downloading fresh dependencies"
           fi
 
-      # M1 — Automated retry on transient build errors
-      # M2 — Dependency version pinning with fallback
       - name: Install dependencies with retry (M1 + M2)
         id: install-deps
         uses: nick-fields/retry@v3
@@ -257,20 +203,18 @@ jobs:
           command: |
             python -m pip install --upgrade pip 2>&1 | tee -a build.log
             pip install -r requirements.txt 2>&1 | tee -a build.log
-            EXIT_CODE=${PIPESTATUS[0]}
-            if [ $EXIT_CODE -ne 0 ]; then
-              echo "M2: Primary install failed, attempting fallback install without version pins..."
-              pip install Flask Flask-SQLAlchemy Flask-Marshmallow marshmallow-sqlalchemy pytest pytest-cov 2>&1 | tee -a build.log
-              EXIT_CODE=$?
+            PIP_EXIT=${PIPESTATUS[0]}
+            if [ $PIP_EXIT -ne 0 ]; then
+              echo "M2: Primary install failed, attempting fallback without version pins..." | tee -a build.log
+              pip install Flask Flask-SQLAlchemy pytest pytest-cov 2>&1 | tee -a build.log
+              PIP_EXIT=${PIPESTATUS[0]}
             fi
-            exit $EXIT_CODE
+            exit $PIP_EXIT
 
-      - name: Verify imports compile cleanly
+      - name: Verify app imports cleanly
         run: |
           python -c "from app import create_app; app = create_app(); print('OK: app factory loaded')" 2>&1 | tee -a build.log
-          EXIT_CODE=${PIPESTATUS[0]}
-          echo "Import verification exit code: $EXIT_CODE"
-          exit $EXIT_CODE
+          exit ${PIPESTATUS[0]}
 
       - name: Upload build log
         if: always()
@@ -281,27 +225,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # M3 — Automated notification and branch lockout
-      - name: Notify on build failure
+      - name: Notify on build failure (M3)
         if: failure()
         run: |
           echo "=== M3: Build Failure Notification ==="
           echo "Branch: ${{ github.ref_name }}"
           echo "Commit: ${{ github.sha }}"
           echo "Author: ${{ github.actor }}"
-          echo "Workflow: ${{ github.workflow }}"
-          echo ""
           echo "ACTION REQUIRED: Build failed after ${{ env.MAX_RETRIES }} retries."
-          echo "Further commits to this branch are blocked until the build is fixed."
-          echo "Please check the install/import step logs above for details."
 
-  # ═══════════════════════════════════════════
-  # STAGE 2: TEST
-  # Mechanisms active:
-  #   M4 — Automated retry of failed tests
-  #   M5 — Flaky test quarantine
-  #   M6 — Test result trend analysis
-  # ═══════════════════════════════════════════
   test:
     name: "Stage 2 — Test"
     runs-on: ubuntu-latest
@@ -322,15 +254,14 @@ jobs:
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          restore-keys: ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # M4 — Automated retry of failed tests
-      # flaky_failure_log.txt accumulates failed-attempt evidence across
-      # retries so M5 can detect flakiness even when later attempts pass.
+      - name: Create test-results directory
+        run: mkdir -p test-results
+
       - name: Run tests with retry (M4)
         id: run-tests
         uses: nick-fields/retry@v3
@@ -353,7 +284,6 @@ jobs:
             exit $EXIT_CODE
           continue_on_error: false
 
-      # M5 — Flaky Test Quarantine Analysis
       - name: Analyse test results for flakiness (M5)
         if: always()
         run: |
@@ -361,70 +291,60 @@ jobs:
           FLAG_FILE="flaky_failure_log.txt"
           JUNIT="test-results/junit.xml"
 
-          if [ -f "$FLAG_FILE" ] && [ -f "$JUNIT" ]; then
-            echo "M5: FLAKY TEST DETECTED"
-            echo ""
-            echo "Evidence: $FLAG_FILE captured the following failed attempt(s):"
-            cat "$FLAG_FILE"
-            echo ""
-            echo "The test suite FAILED on one or more early attempts but"
-            echo "PASSED on a subsequent retry (M4). This is the defining"
-            echo "characteristic of a flaky test."
-            echo "Classification: FLAKY CANDIDATE"
-            echo ""
-            echo "Recommended action: quarantine the failing test from the"
-            echo "critical path on the next pipeline run pending investigation."
-          elif [ -f "$FLAG_FILE" ]; then
-            echo "M5: FAILURES DETECTED (deterministic — not flaky)"
-            cat "$FLAG_FILE"
-          else
-            echo "M5: All tests passed on first attempt — no flaky test candidates detected"
+          FINAL_FAILURES=0
+          if [ -f "$JUNIT" ]; then
+            FINAL_FAILURES=$(python -c "
+          import xml.etree.ElementTree as ET
+          try:
+              tree = ET.parse('$JUNIT')
+              root = tree.getroot()
+              suite = root if root.tag == 'testsuite' else root.find('testsuite')
+              if suite is None: suite = root
+              print(int(suite.get('failures',0)) + int(suite.get('errors',0)))
+          except Exception:
+              print(0)
+          " 2>/dev/null || echo 0)
           fi
 
-      # M6 — Test result trend analysis
+          FLAG_HAS_CONTENT=false
+          if [ -f "$FLAG_FILE" ] && [ -s "$FLAG_FILE" ]; then
+            FLAG_HAS_CONTENT=true
+          fi
+
+          if $FLAG_HAS_CONTENT && [ "$FINAL_FAILURES" -eq 0 ]; then
+            echo "M5: FLAKY TEST DETECTED — failed on attempt(s) but passed on retry"
+            cat "$FLAG_FILE"
+            echo "Classification: FLAKY CANDIDATE"
+          elif $FLAG_HAS_CONTENT && [ "$FINAL_FAILURES" -gt 0 ]; then
+            echo "M5: DETERMINISTIC FAILURE (failed on all attempts)"
+            cat "$FLAG_FILE"
+          else
+            echo "M5: All tests passed on first attempt — no flaky candidates detected"
+          fi
+
       - name: Test result trend analysis (M6)
         if: always()
         run: |
           echo "=== M6: Test Result Trend Analysis ==="
           JUNIT="test-results/junit.xml"
-
           if [ ! -f "$JUNIT" ]; then
-            echo "No JUnit report found — parsing pytest stdout from test.log"
-            if [ -f "test.log" ]; then
-              SUMMARY=$(grep -E "passed|failed|error" test.log | tail -3 || true)
-              echo "$SUMMARY"
-            fi
+            echo "No JUnit report — parsing test.log"
+            [ -f "test.log" ] && grep -E "passed|failed|error" test.log | tail -3 || true
             exit 0
           fi
-
-          TESTS=$(python -c "
+          python -c "
           import xml.etree.ElementTree as ET
           tree = ET.parse('$JUNIT')
           root = tree.getroot()
           suite = root if root.tag == 'testsuite' else root.find('testsuite')
           if suite is None: suite = root
-          print(suite.get('tests', 0))
-          print(suite.get('failures', 0))
-          print(suite.get('errors', 0))
-          ")
-
-          TOTAL=$(echo "$TESTS" | sed -n '1p')
-          FAILED=$(echo "$TESTS" | sed -n '2p')
-          ERRORS=$(echo "$TESTS" | sed -n '3p')
-          PASSED=$((TOTAL - FAILED - ERRORS))
-
-          echo "Tests run:   $TOTAL"
-          echo "Passed:      $PASSED"
-          echo "Failed:      $FAILED"
-          echo "Errors:      $ERRORS"
-          echo ""
-
-          if [ "$FAILED" -gt 0 ] || [ "$ERRORS" -gt 0 ]; then
-            echo "TREND ALERT: Test failures detected."
-            echo "If failure count is increasing across runs, investigate root cause."
-          else
-            echo "TREND OK: All tests passed in this run."
-          fi
+          total  = int(suite.get('tests', 0))
+          failed = int(suite.get('failures', 0))
+          errors = int(suite.get('errors', 0))
+          passed = total - failed - errors
+          print(f'Tests run: {total} | Passed: {passed} | Failed: {failed} | Errors: {errors}')
+          print('TREND ALERT: Test failures detected.' if failed+errors > 0 else 'TREND OK: All tests passed.')
+          "
 
       - name: Upload test results
         if: always()
@@ -432,6 +352,7 @@ jobs:
         with:
           name: test-results-${{ github.run_number }}
           path: test-results/
+          if-no-files-found: ignore
           retention-days: 30
 
       - name: Upload test log
@@ -452,12 +373,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # ═══════════════════════════════════════════
-  # STAGE 3: PACKAGE
-  # Mechanisms active:
-  #   M10 — Fresh container reset (implicit via new runner)
-  #   M12 — Timeout-based job cancellation
-  # ═══════════════════════════════════════════
   package:
     name: "Stage 3 — Package"
     runs-on: ubuntu-latest
@@ -478,8 +393,7 @@ jobs:
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          restore-keys: ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: pip install -r requirements.txt build wheel
@@ -498,7 +412,6 @@ jobs:
             exit 1
           fi
           echo "Wheel artifact produced: $WHEEL"
-          ls -lh "$WHEEL"
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
@@ -507,12 +420,6 @@ jobs:
           path: dist/*.whl
           retention-days: 30
 
-  # ═══════════════════════════════════════════
-  # STAGE 4: DEPLOY
-  # Mechanisms active:
-  #   M7 — Automated rollback to last known good state
-  #   M12 — Timeout-based job cancellation
-  # ═══════════════════════════════════════════
   deploy:
     name: "Stage 4 — Deploy"
     runs-on: ubuntu-latest
@@ -533,41 +440,21 @@ jobs:
           path: dist/
 
       - name: Simulate deployment
-        id: deploy-step
         run: |
           echo "=== Deploying grade-management ==="
           WHEEL=$(find dist -name "*.whl" | head -1)
           echo "Deploying artifact: $WHEEL"
-          echo "Deployment target: production (simulated)"
           echo "Build number: ${{ github.run_number }}"
           echo "Commit SHA: ${{ github.sha }}"
           echo "Deployment successful."
 
-      # M7 — Automated rollback to last known good state
-      - name: Rollback on deployment failure
+      - name: Rollback on deployment failure (M7)
         if: failure()
         run: |
           echo "=== M7: Automated Rollback Initiated ==="
-          echo "Deployment failed. Identifying last known good commit..."
-          LAST_GOOD=$(git log --oneline -5)
-          echo "Recent commit history:"
-          echo "$LAST_GOOD"
-          echo ""
-          echo "In a production environment, this step would:"
-          echo "  1. Identify the last successful deployment commit"
-          echo "  2. Create a revert commit automatically"
-          echo "  3. Push the revert to restore the pipeline to a known good state"
-          echo "  4. Notify the team of the rollback via Slack/email"
-          echo ""
-          echo "Rolling back to last known good state..."
+          git log --oneline -5
           git log --oneline -1 HEAD~1 || echo "No previous commit available for rollback"
 
-  # ═══════════════════════════════════════════
-  # POST-PIPELINE: M13 ML FAILURE CLASSIFICATION
-  # Mechanism active:
-  #   M13 — ML-based failure-type classifier
-  # Runs after all major stages regardless of outcome.
-  # ═══════════════════════════════════════════
   anomaly-detection:
     name: "M13 — ML Failure Classification"
     runs-on: ubuntu-latest
@@ -588,6 +475,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -q pandas numpy scikit-learn joblib
+
+      - name: Download config validation log
+        uses: actions/download-artifact@v4
+        with:
+          name: config-validation-log-${{ github.run_number }}
+          path: logs/
+        continue-on-error: true
 
       - name: Download build log
         uses: actions/download-artifact@v4
@@ -621,26 +515,29 @@ jobs:
         run: |
           echo "=== M13: ML Failure Classification ==="
 
-          cat > pipeline_status.json <<EOF
-          {
-            "platform": "github",
-            "workflow": "${{ github.workflow }}",
-            "run_id": "${{ github.run_id }}",
-            "run_number": "${{ github.run_number }}",
-            "commit": "${{ github.sha }}",
-            "branch": "${{ github.ref_name }}",
-            "event": "${{ github.event_name }}",
-            "config_status": "${{ needs.configuration-validation.result }}",
-            "build_status": "${{ needs.build.result }}",
-            "test_status": "${{ needs.test.result }}",
-            "package_status": "${{ needs.package.result }}"
+          python -c "
+          import json
+          status = {
+              'platform':      'github',
+              'workflow':      '${{ github.workflow }}',
+              'run_id':        '${{ github.run_id }}',
+              'run_number':    '${{ github.run_number }}',
+              'commit':        '${{ github.sha }}',
+              'branch':        '${{ github.ref_name }}',
+              'event':         '${{ github.event_name }}',
+              'config_status': '${{ needs.configuration-validation.result }}',
+              'build_status':  '${{ needs.build.result }}',
+              'test_status':   '${{ needs.test.result }}',
+              'package_status':'${{ needs.package.result }}',
           }
-          EOF
+          print(json.dumps(status, indent=2))
+          open('pipeline_status.json', 'w').write(json.dumps(status, indent=2))
+          "
 
           echo "--- pipeline_status.json ---"
           cat pipeline_status.json
           echo "--- available logs ---"
-          find logs -maxdepth 3 -type f -print || true
+          find logs -maxdepth 3 -type f -print 2>/dev/null || true
 
           if [ -f "scripts/m13_predict.py" ] && [ -f "models/m13_model_bundle.pkl" ]; then
             python scripts/m13_predict.py \
@@ -650,9 +547,13 @@ jobs:
               --output m13_classification_report.json
           else
             echo "WARNING: M13 model files not found — generating placeholder report"
-            cat > m13_classification_report.json <<EOF
-          {"status":"skipped","reason":"model_files_not_found","pipeline_status":$(cat pipeline_status.json)}
-          EOF
+            python -c "
+          import json
+          ps = json.load(open('pipeline_status.json'))
+          report = {'status':'skipped','reason':'model_files_not_found','pipeline_status':ps}
+          print(json.dumps(report, indent=2))
+          open('m13_classification_report.json','w').write(json.dumps(report, indent=2))
+          "
           fi
 
           cat m13_classification_report.json

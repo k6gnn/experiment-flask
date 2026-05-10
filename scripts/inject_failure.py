@@ -50,7 +50,12 @@ import shutil
 CONTROLLER      = "src/main/java/com/university/grades/controller/StudentController.java"
 CONTROLLER_TEST = "src/test/java/com/university/grades/controller/StudentControllerTest.java"
 SERVICE_TEST    = "src/test/java/com/university/grades/service/StudentServiceTest.java"
-INFRA_SIMULATOR = "src/test/java/com/university/grades/infra/InfrastructureSimulatorTest.java"
+INFRA_SIMULATOR       = "src/test/java/com/university/grades/infra/InfrastructureSimulatorTest.java"
+
+# Flask app files (used for E8 cross-environment experiments)
+FLASK_CONTROLLER_TEST = "tests/test_student_controller.py"
+FLASK_APP_INIT        = "app/__init__.py"
+FLASK_REQUIREMENTS    = "requirements.txt"
 APP_PROPS       = "src/main/resources/application.properties"
 POM_XML         = "pom.xml"
 JVM_CONFIG      = ".mvn/jvm.config"
@@ -502,7 +507,7 @@ def inject_artifact():
                         <configuration>
                             <target>
                                 <delete dir="target" includeemptydirs="true" quiet="true"/>
-                                <echo message="INJECTED: e5g corrupted artifact — no JAR artifact found in target/ (target directory deleted to simulate corrupted artifact)"/>
+                                <echo message="INJECTED: target directory deleted to simulate corrupted artifact (E5g)"/>
                             </target>
                         </configuration>
                     </execution>
@@ -524,6 +529,77 @@ def inject_artifact():
     print("  Injected: antrun plugin deletes target/ during package phase into pom.xml")
     print("  Expected error: 'No JAR artifact found in target/' in pipeline package stage")
     return True
+
+
+# ─── E8b: Configuration Failure — Flask ──────────────────────────────────────
+
+def inject_configuration_failure_flask():
+    """
+    Corrupts app/__init__.py by removing the SERVER_PORT config key.
+    M8 validates that SERVER_PORT is present in app/__init__.py. When it is
+    missing M8 exits 1, the pipeline stops, and M13 classifies as configuration.
+
+    This mirrors E4 (Java server.port=INVALID_PORT_VALUE) but for Flask:
+    instead of a bad value, we remove the key entirely so M8's grep fails.
+    Failure category: Configuration failure
+    Expected mechanism response: M8 gate catches it, M7 rollback on deploy
+    """
+    print("\n[INJECT] Flask configuration failure -> app/__init__.py")
+    if not backup(FLASK_APP_INIT):
+        return False
+
+    content = read_file(FLASK_APP_INIT)
+
+    # Comment out SERVER_PORT so M8's grep for 'SERVER_PORT' finds nothing
+    if '"SERVER_PORT"' not in content and "'SERVER_PORT'" not in content:
+        print("  WARNING: SERVER_PORT config key not found in app/__init__.py.")
+        return False
+
+    injected = content.replace(
+        'app.config["SERVER_PORT"] = 5000',
+        '# INJECTED E8b: SERVER_PORT removed to trigger M8 config validation failure\n'
+        '    # app.config["SERVER_PORT"] = 5000'
+    )
+
+    if injected == content:
+        print("  WARNING: Injection target not found. File may have changed.")
+        return False
+
+    write_file(FLASK_APP_INIT, injected)
+    print("  Injected: SERVER_PORT config key commented out in app/__init__.py")
+    print("  Expected error: M8 FAILURE: Required config key 'SERVER_PORT' missing")
+    return True
+
+
+# ─── E8c: Infrastructure Failure — Flask ─────────────────────────────────────
+
+def inject_infrastructure_failure_flask():
+    """
+    Adds a non-existent package to requirements.txt, causing pip install to
+    fail in the Build stage with a dependency resolution error.
+
+    This mirrors E5 (Java non-existent Maven dependency) for the Flask stack.
+    Failure category: Infrastructure failure
+    Expected mechanism response: M1 (retry), M2 (fallback install attempt)
+    """
+    print("\n[INJECT] Flask infrastructure failure -> requirements.txt")
+    if not backup(FLASK_REQUIREMENTS):
+        return False
+
+    content = read_file(FLASK_REQUIREMENTS)
+
+    fake_dep = (
+        "\n"
+        "# INJECTED E8c: Non-existent package to simulate infrastructure failure\n"
+        "nonexistent-flask-package-xyz==9.9.9\n"
+    )
+
+    injected = content.rstrip() + fake_dep
+    write_file(FLASK_REQUIREMENTS, injected)
+    print("  Injected: nonexistent-flask-package-xyz==9.9.9 into requirements.txt")
+    print("  Expected error: pip could not find a version that satisfies the requirement")
+    return True
+
 
 
 # ─── E5h: External Service Unavailable ───────────────────────────────────────
@@ -619,6 +695,68 @@ def inject_flaky_configuration_gitlab():
     ok2 = inject_configuration_failure()
     return ok1 and ok2
 
+# ─── E8: Flaky Test — Flask / Python variant ─────────────────────────────────
+
+def inject_flaky_test_flask():
+    """
+    Injects a stateful marker-file flaky guard into the Flask test suite for
+    the E8 cross-environment experiment.
+
+    Targets: tests/test_student_controller.py
+    Method:  test_get_all_students_returns_200_with_list
+
+    The guard uses Python's os.path / open() instead of Java's java.io.File.
+    A separate marker file (/tmp/flaky_marker_flask.tmp) is used so this
+    injection does not interfere with the Java E3 marker if both repos are
+    checked out in the same workspace.
+
+    On attempt 1: marker absent -> creates marker -> raises RuntimeError
+    On attempt 2: marker present -> test proceeds normally
+    Failure category: Flaky test
+    Expected mechanism response: M4 (retry), M5 (quarantine), M6 (trend)
+    """
+    print("\n[INJECT] Flask flaky test -> tests/test_student_controller.py")
+    if not backup(FLASK_CONTROLLER_TEST):
+        return False
+
+    content = read_file(FLASK_CONTROLLER_TEST)
+
+    # Python marker-file guard to insert at the top of the target test method.
+    # Uses 4-space indentation to match the class body, 8-space for method body.
+    guard_block = """        # INJECTED: Stateful marker-file flakiness (E8 Flask)
+        import os as _os
+        _flask_marker = "/tmp/flaky_marker_flask.tmp"
+        if not _os.path.exists(_flask_marker):
+            open(_flask_marker, "w").close()
+            raise RuntimeError(
+                "Simulated transient failure: cold-start instability detected (Flask E8)"
+            )
+        # END INJECTED
+"""
+
+    # Insert the guard at the start of the target method body.
+    # The method signature in the clean file is:
+    #   def test_get_all_students_returns_200_with_list(self):
+    target_method = "    def test_get_all_students_returns_200_with_list(self):"
+
+    if target_method not in content:
+        print("  WARNING: Injection target 'test_get_all_students_returns_200_with_list' not found.")
+        print("  File may have changed.")
+        return False
+
+    # Find the method and the first line of its body (the docstring or first statement)
+    method_idx = content.find(target_method)
+    # Find the end of the def line
+    body_start = content.find("\n", method_idx) + 1
+    # Insert guard block at the start of the method body
+    injected = content[:body_start] + guard_block + content[body_start:]
+
+    write_file(FLASK_CONTROLLER_TEST, injected)
+    print("  Injected: Python marker-file guard into test_get_all_students_returns_200_with_list")
+    print("  Marker file: /tmp/flaky_marker_flask.tmp")
+    print("  Expected: RuntimeError on attempt 1, passes on attempt 2")
+    return True
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # MULTI-CAUSE TRIPLES + QUAD (E13–E15)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -655,7 +793,7 @@ def inject_all():
 def restore_all():
     """Restores all injected files to their original state from backups."""
     print("\n[RESTORE] Restoring all files to original state...")
-    files = [CONTROLLER, CONTROLLER_TEST, SERVICE_TEST, INFRA_SIMULATOR, APP_PROPS, POM_XML, JVM_CONFIG]
+    files = [CONTROLLER, CONTROLLER_TEST, SERVICE_TEST, INFRA_SIMULATOR, FLASK_CONTROLLER_TEST, FLASK_APP_INIT, FLASK_REQUIREMENTS, APP_PROPS, POM_XML, JVM_CONFIG]
     for f in files:
         restore(f)
     print("\nAll files restored. Pipeline is back to clean baseline.")
@@ -670,6 +808,9 @@ FAILURE_TYPES = {
     "test":           inject_test_failure,
     "flaky":          inject_flaky_test,
     "flaky_gitlab":   inject_flaky_test_gitlab,
+    "flaky_flask":    inject_flaky_test_flask,         # E8:  Flask flaky (cross-environment)
+    "config_flask":   inject_configuration_failure_flask,  # E8b: Flask configuration
+    "infra_flask":    inject_infrastructure_failure_flask,  # E8c: Flask infrastructure
     "configuration":  inject_configuration_failure,
     "infrastructure": inject_infrastructure_failure,
 
