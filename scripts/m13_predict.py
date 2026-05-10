@@ -823,6 +823,36 @@ def main() -> None:
         probabilities["configuration"] = confidence
         guardrail_applied = True
         model_used = model_used + "+stage_override"
+
+    # Build-stage infrastructure override:
+    # When build fails, test is skipped, AND an infra signal is present in logs,
+    # the model can be misled by compile-step features that fire because
+    # infer_failing_step maps build_status=failure to 'compile build'.
+    # If we have a confirmed infra signal (kw_infra_runner or kw_infra_network),
+    # the stage evidence is unambiguous — override to infrastructure.
+    # Guard: only fires when config did NOT fail (config_stage_only takes priority).
+    # feats is the flat list from extract_features(); build a name->value dict
+    _feat_map = dict(zip(FEATURE_NAMES, feats)) if feats is not None else {}
+    _infra_signal = (
+        _feat_map.get("feat_kw_infra_runner", 0) > 0
+        or _feat_map.get("feat_kw_infra_network", 0) > 0
+    )
+    build_stage_infra = (
+        _build_st in ("failure", "failed", "FAILURE")
+        and _test_st in _SKIPPED
+        and _config_st not in ("failure", "failed", "FAILURE")
+        and _infra_signal
+    )
+    if build_stage_infra and classification != "infrastructure":
+        log.info(
+            "  Stage override: build_stage_infra=True (infra signal present) "
+            "-> overriding '%s' to 'infrastructure'", classification
+        )
+        classification = "infrastructure"
+        confidence     = max(confidence, 0.75)
+        probabilities["infrastructure"] = confidence
+        guardrail_applied = True
+        model_used = model_used + "+infra_stage_override"
     report = {
         "classification":  classification,
         "confidence":      round(confidence, 4),
