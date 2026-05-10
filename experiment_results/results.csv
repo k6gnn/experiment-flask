@@ -5,3 +5,4 @@ E8,3,github,flaky_flask,success,160,2026-05-10T17:18:15Z,2026-05-10T17:21:07.560
 
 E8b,1,github,config_flask,failure,89,2026-05-10T20:53:28Z,2026-05-10T20:55:01.746601+00:00,,medium,https://github.com/k6gnn/experiment-flask/actions/runs/25639511674
 E8b,2,github,config_flask,failure,85,2026-05-10T20:55:24Z,2026-05-10T20:57:01.252588+00:00,,high,https://github.com/k6gnn/experiment-flask/actions/runs/25639552957
+E8b,3,github,config_flask,failure,84,2026-05-10T20:57:39Z,2026-05-10T20:59:18.509523+00:00,,high,https://github.com/k6gnn/experiment-flask/actions/runs/25639599619
