@@ -575,29 +575,45 @@ def inject_configuration_failure_flask():
 
 def inject_infrastructure_failure_flask():
     """
-    Adds a non-existent package to requirements.txt, causing pip install to
-    fail in the Build stage with a dependency resolution error.
+    Injects a bad import statement into app/__init__.py so the app fails to
+    load with ModuleNotFoundError after pip install succeeds.
 
-    This mirrors E5 (Java non-existent Maven dependency) for the Flask stack.
+    Why NOT requirements.txt:
+      The ci-cd.yml M2 fallback installs Flask Flask-SQLAlchemy pytest pytest-cov
+      directly without version pins. A fake package in requirements.txt causes
+      pip to fail on the first attempt, but M2 immediately recovers by installing
+      the real packages — so the build succeeds and no failure is observable.
+
+    This approach is unrecoverable by M2:
+      pip install succeeds (no fake entry in requirements.txt)
+      python -c "from app import create_app" -> ModuleNotFoundError
+      build.log records the error, build job fails
+      M13 classifies as infrastructure (missing dependency = infra)
+
+    This mirrors E5 (Java non-existent Maven dependency) for Flask:
+      Java: dep resolution fails at compile time (Maven phase)
+      Flask: dep resolution fails at import time (Python runtime)
     Failure category: Infrastructure failure
-    Expected mechanism response: M1 (retry), M2 (fallback install attempt)
+    Expected mechanism response: M1 (retry — all fail), M3 (notification)
     """
-    print("\n[INJECT] Flask infrastructure failure -> requirements.txt")
-    if not backup(FLASK_REQUIREMENTS):
+    print("\n[INJECT] Flask infrastructure failure -> app/__init__.py")
+    if not backup(FLASK_APP_INIT):
         return False
 
-    content = read_file(FLASK_REQUIREMENTS)
+    content = read_file(FLASK_APP_INIT)
 
-    fake_dep = (
-        "\n"
-        "# INJECTED E8c: Non-existent package to simulate infrastructure failure\n"
-        "nonexistent-flask-package-xyz==9.9.9\n"
+    # Inject a bad import at the very top of the file, before any real imports.
+    # This causes every attempt to import the app to raise ModuleNotFoundError.
+    bad_import = (
+        "# INJECTED E8c: Missing dependency to simulate infrastructure failure\n"
+        "import nonexistent_infrastructure_module_xyz  "
+        "# ModuleNotFoundError: No module named nonexistent_infrastructure_module_xyz\n"
     )
 
-    injected = content.rstrip() + fake_dep
-    write_file(FLASK_REQUIREMENTS, injected)
-    print("  Injected: nonexistent-flask-package-xyz==9.9.9 into requirements.txt")
-    print("  Expected error: pip could not find a version that satisfies the requirement")
+    injected = bad_import + content
+    write_file(FLASK_APP_INIT, injected)
+    print("  Injected: bad import into app/__init__.py")
+    print("  Expected error: ModuleNotFoundError: No module named nonexistent_infrastructure_module_xyz")
     return True
 
 

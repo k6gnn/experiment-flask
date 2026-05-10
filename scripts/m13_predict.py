@@ -275,6 +275,8 @@ def extract_features(row: dict) -> list[float]:
         r"method timed out after \d+|test timed out after \d+|"
         r"execution timed out after \d+|timed out after \d+ seconds|"
         r"simulated deadlock|simulated infrastructure.*timeout|"
+        # E8c Flask import failure signal
+        r"modulenotfounderror|no module named .{0,80}infra|"
         # Catch-all for any injected infrastructure simulation message
         r"simulated infrastructure failure", c)
 
