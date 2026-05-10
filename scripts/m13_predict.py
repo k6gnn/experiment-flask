@@ -162,14 +162,9 @@ def extract_features(row: dict) -> list[float]:
     c = clean(text)
 
     # ── Test counts ───────────────────────────────────────────────────────────
-    maven_runs   = sum(int(x) for x in re.findall(r"tests run: (\d+)", c, re.I))
-    maven_fail   = sum(int(x) for x in re.findall(r"failures: (\d+)", c, re.I))
-    # FIX RC2: Surefire records OOM/RuntimeException as 'Errors', not 'Failures'.
-    # Treat errors as failures so feat_tests_failed and fail_ratio are non-zero
-    # when the only signal is "Errors: 1" (as happens for E5B OOM).
-    maven_errors = sum(int(x) for x in re.findall(r"errors: (\d+)", c, re.I))
-    maven_fail   = maven_fail + maven_errors
-    maven_skip   = sum(int(x) for x in re.findall(r"skipped: (\d+)", c, re.I))
+    maven_runs  = sum(int(x) for x in re.findall(r"tests run: (\d+)", c, re.I))
+    maven_fail  = sum(int(x) for x in re.findall(r"failures: (\d+)", c, re.I))
+    maven_skip  = sum(int(x) for x in re.findall(r"skipped: (\d+)", c, re.I))
     pytest_fail = sum(int(x) for x in re.findall(r"(\d+) failed", c, re.I))
     pytest_pass = sum(int(x) for x in re.findall(r"(\d+) passed", c, re.I))
     pytest_skip = sum(int(x) for x in re.findall(r"(\d+) skipped", c, re.I))
@@ -247,18 +242,8 @@ def extract_features(row: dict) -> list[float]:
         r"assertion .left == right. failed|not equal: expected", c)
     kw_flaky = _bool(
         r"testtimeoutexception|timed out after \d+|concurrentmodificationexception|intermittent|"
-        # FIX E5I: 'race condition' and 'data race' removed from kw_flaky.
-        # When they appear in the InfrastructureSimulator's message ("Simulated race condition")
-        # they signal a deliberate infra-class experiment, not a genuine flaky test.
-        # Generic concurrency issues that ARE flaky keep their own patterns below.
-        #
-        # FIX E5H: 'sockettimeoutexception' and 'readtimeoutexception' removed from kw_flaky.
-        # A SocketTimeoutException from a failed external network call is an infrastructure
-        # signal, not flakiness. Having it here caused the model to lean toward flaky_test
-        # for E5H and pulled it outside the classes the infra guardrail covers.
-        # Both are now covered by kw_infra_network instead.
-        r"non.?deterministic|rerun failures|flakes: [1-9]|"
-        r"\bflaky\b|flakytest|"
+        r"race condition|data race|deadlock|non.?deterministic|rerun failures|flakes: [1-9]|"
+        r"\bflaky\b|flakytest|sockettimeoutexception|readtimeoutexception|"
         r"passed \d+ times.*failed \d+ times|retry.*attempt \d+|staleelementreferenceexception|"
         r"jest did not exit one second", c)
     kw_infra_network = _bool(
@@ -273,35 +258,25 @@ def extract_features(row: dict) -> list[float]:
         r"readtimeouterror.*httpsconnectionpool|"
         r"retrying.{0,80}(readtimeouterror|connectionerror)|"
         r"no space left on device|enospc|"
-        # FIX E5D: BindException / port-conflict is an OS-level resource failure,
-        # not an application assertion. Covers both the simulator's message and
-        # real runner port-conflict errors across all platforms.
-        r"address already in use|bindexception|eaddrinuse|"
-        r"simulated port conflict|"
-        # FIX E5H: socket/read timeouts are infra (external service unavailable),
-        # not flaky tests. Moved here from kw_flaky. Also match the simulator's
-        # message directly so this fires even if the surefire artifact is absent.
-        r"sockettimeoutexception|readtimeoutexception|connect timed out|connection timed out|"
-        r"no route to host|network is unreachable|"
-        r"simulated external service unavailable", c)
+        # E5D port conflict — OS-level port binding failure
+        r"bindexception|address already in use|eaddrinuse|"
+        # E5H external service — network connection timeout
+        r"sockettimeoutexception|connection timed out|connect timed out|"
+        # E8c pip/package registry failure signals
+        r"no matching distribution found|could not find a version that satisfies|"
+        r"requirement .{0,80}from versions: none|package .{0,80}not found", c)
     kw_infra_runner = _bool(
         r"the runner has received a shutdown signal|runner.{0,40}lost communication|"
         r"worker process exited with code|process completed with exit code 137|"
         r"outofmemoryerror|java\.lang\.outofmemoryerror|oomkilled|"
         r"javascript heap out of memory|fatal error: runtime: out of memory|"
         r"signal: killed|updated oom_score_adj|"
-        # FIX E5I: race condition / data race moved here from kw_flaky.
-        # "Simulated race condition" and "data race" in the infra simulator are
-        # resource-safety failures, not test flakiness. Keeping 'deadlock' here
-        # too since it was already present via kw_flaky and belongs with infra.
-        r"simulated race condition|data race|deadlock|"
-        r"unsynchronised concurrent access caused data corruption|"
-        # FIX E5G: a missing/corrupted JAR is a packaging-stage infra failure.
-        # The antrun plugin deletes target/ so the verify step finds no artifact.
-        # These phrases appear in the pipeline log and in the antrun echo message.
-        r"no jar artifact found|failure: no jar artifact found|"
-        r"injected.*target directory deleted|e5g|"
-        r"corrupt.*artifact|artifact.*corrupt", c)
+        # E5E deadlock — JUnit @Timeout produces these specific messages
+        r"method timed out after \d+|test timed out after \d+|"
+        r"execution timed out after \d+|timed out after \d+ seconds|"
+        r"simulated deadlock|simulated infrastructure.*timeout|"
+        # Catch-all for any injected infrastructure simulation message
+        r"simulated infrastructure failure", c)
 
     # ── Split config sub-features ─────────────────────────────────────────────
     config_secret_env = _bool(
@@ -824,65 +799,13 @@ def main() -> None:
     # Requiring text signals caused false negatives on Jenkins when
     # config_validation.log was absent from the collected logs directory.
     feat_map = dict(zip(FEATURE_NAMES, feats))
-
-    # ── OOM / infra-runner guardrail ──────────────────────────────────────────
-    # FIX RC3/RC4: When the ML model sees tests_ran=1 + error_in_test_step=1 it
-    # classifies as test_failure even if infra keywords are set, because it was
-    # trained on OOM patterns where the runner dies before any test runs (tests_ran=0).
-    # The simulator catches exceptions inside the JVM so the runner survives —
-    # an out-of-distribution pattern the model has never seen.
-    #
-    # Guardrail: if any infra keyword fired (runner OR network) AND there are no
-    # assertion-style signals, force classification to infrastructure.
-    # Covers: E5B (OOM), E5D (port conflict → kw_infra_network),
-    #         E5F (disk → kw_infra_network), E5H (external svc → kw_infra_network),
-    #         E5I (race condition → kw_infra_runner via 'simulated race condition').
-    #
-    # FIX E5H: Extended to also override 'configuration' mispredictions.
-    # Previously the guardrail only caught test_failure/flaky_test/unknown.
-    # The ML model can predict 'configuration' on noisy low-signal inputs (e.g.
-    # when SocketTimeoutException was still in kw_flaky it could push the model
-    # toward configuration via feat_config_* interactions). The true-config guard
-    # (feat_map["feat_config_yaml_workflow"] etc.) prevents false positives: we
-    # only override 'configuration' when no genuine config signal is present.
-    _infra_runner_kw  = feat_map.get("feat_kw_infra_runner", 0)
-    _infra_network_kw = feat_map.get("feat_kw_infra_network", 0)
-    _assert_kw        = feat_map.get("feat_kw_test_assert", 0)
-    _true_config_kw   = (
-        feat_map.get("feat_config_yaml_workflow", 0)
-        + feat_map.get("feat_config_secret_env", 0)
-        + feat_map.get("feat_config_auth_permission", 0)
-        + feat_map.get("feat_config_tool_version", 0)
-        + feat_map.get("feat_dep_resolution_without_network", 0)
-    )
-    _infra_guardrail_classes = ("test_failure", "flaky_test", "unknown", "configuration")
-    if (
-        (_infra_runner_kw > 0 or _infra_network_kw > 0)
-        and _assert_kw == 0          # no assertion failure evidence
-        and classification in _infra_guardrail_classes
-        # only override 'configuration' when no true config signal is present
-        and not (classification == "configuration" and _true_config_kw > 0)
-    ):
-        log.info(
-            "  OOM/infra guardrail: infra_runner=%s infra_network=%s assert=0 "
-            "-> overriding '%s' to 'infrastructure'",
-            _infra_runner_kw, _infra_network_kw, classification
-        )
-        classification = "infrastructure"
-        confidence     = max(confidence, 0.72)
-        probabilities["infrastructure"] = confidence
-        guardrail_applied = True
-        model_used = model_used + "+oom_infra_guard"
-
     # Use None as default so absent keys (stages that never ran) are treated as
     # skipped, not "success".  Your pipeline_status.json won't contain test_status
     # or package_status when M8 fails because those stages never executed.
-    _build_st   = status.get("build_status")   # None if key absent
-    _test_st    = status.get("test_status")    # None if key absent
-    _config_st  = status.get("config_status")
-    _package_st = status.get("package_status")
-    _SKIPPED    = {"skipped", "unknown", "", None}
-    _SUCCESS    = {"success", "SUCCESS"}
+    _build_st  = status.get("build_status")   # None if key absent
+    _test_st   = status.get("test_status")    # None if key absent
+    _config_st = status.get("config_status")
+    _SKIPPED   = {"skipped", "unknown", "", None}
     config_stage_only = (
         _config_st in ("failure", "failed", "FAILURE")
         and _build_st in _SKIPPED
@@ -898,29 +821,6 @@ def main() -> None:
         probabilities["configuration"] = confidence
         guardrail_applied = True
         model_used = model_used + "+stage_override"
-
-    # ── Package-stage-only override ───────────────────────────────────────────
-    # FIX E5G: When build and test both succeed but package fails, M13 has no
-    # log text from the package stage (it is never uploaded as an artifact).
-    # The model therefore sees near-zero features and can classify anything.
-    # A package-only failure is always an infrastructure/artifact problem:
-    # the compile and test signals were clean, so it cannot be compilation,
-    # test assertion, configuration, or flakiness. Override unconditionally.
-    package_stage_only = (
-        _package_st in ("failure", "failed", "FAILURE")
-        and _build_st in _SUCCESS
-        and _test_st  in _SUCCESS
-    )
-    if package_stage_only and classification != "infrastructure":
-        log.info(
-            "  Stage override: package_stage_only=True (build=success, test=success) "
-            "-> overriding '%s' to 'infrastructure'", classification
-        )
-        classification = "infrastructure"
-        confidence     = max(confidence, 0.75)
-        probabilities["infrastructure"] = confidence
-        guardrail_applied = True
-        model_used = model_used + "+package_stage_override"
     report = {
         "classification":  classification,
         "confidence":      round(confidence, 4),
@@ -984,23 +884,10 @@ def _heuristic_classification(feats: list[float]) -> str:
     flaky_score = (
         f("feat_kw_flaky") * 4
     )
-
-    # FIX: When flaky keyword fires without assertion signals, give a small bonus
-    # so flaky_test wins ties against test_failure (which also scores ~4 via
-    # error_in_test_step + tests_failed when Errors:1 is present).
-    if f("feat_kw_flaky") > 0 and f("feat_kw_test_assert") == 0:
-        flaky_score += 1.0
     infra_score = (
-        f("feat_kw_infra_network") * 5  # FIX: raised from 3 → 5; same reasoning as kw_infra_runner
-        + f("feat_kw_infra_runner") * 5  # FIX RC4: raised from 3 → 5 so OOM beats error_in_test_step
+        f("feat_kw_infra_network") * 3
+        + f("feat_kw_infra_runner") * 3
     )
-
-    # FIX: When any infra keyword fires without a test assertion signal, give a
-    # decisive bonus so the heuristic always returns infrastructure in these cases.
-    # This mirrors the guardrail logic in main() for the model path, ensuring the
-    # heuristic fallback (no model bundle) gives the same answer.
-    if (f("feat_kw_infra_network") > 0 or f("feat_kw_infra_runner") > 0) and f("feat_kw_test_assert") == 0:
-        infra_score += 4.0
     config_score = (
         f("feat_kw_config_fail") * 2
         + f("feat_config_secret_env") * 2

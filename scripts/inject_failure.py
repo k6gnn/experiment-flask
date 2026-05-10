@@ -535,14 +535,16 @@ def inject_artifact():
 
 def inject_configuration_failure_flask():
     """
-    Corrupts app/__init__.py by removing the SERVER_PORT config key.
-    M8 validates that SERVER_PORT is present in app/__init__.py. When it is
-    missing M8 exits 1, the pipeline stops, and M13 classifies as configuration.
+    Renames the SERVER_PORT config key in app/__init__.py to a key M8 does
+    not recognise, so M8's grep -q 'SERVER_PORT' finds nothing and exits 1.
 
-    This mirrors E4 (Java server.port=INVALID_PORT_VALUE) but for Flask:
-    instead of a bad value, we remove the key entirely so M8's grep fails.
+    Previous approach (commenting out the line) failed because grep matches
+    the keyword even inside a comment. Renaming the key removes it from the
+    file entirely while keeping the file syntactically valid Python.
+
+    This mirrors E4 (Java server.port=INVALID_PORT_VALUE) for Flask.
     Failure category: Configuration failure
-    Expected mechanism response: M8 gate catches it, M7 rollback on deploy
+    Expected mechanism response: M8 gate catches it before build runs.
     """
     print("\n[INJECT] Flask configuration failure -> app/__init__.py")
     if not backup(FLASK_APP_INIT):
@@ -550,24 +552,22 @@ def inject_configuration_failure_flask():
 
     content = read_file(FLASK_APP_INIT)
 
-    # Comment out SERVER_PORT so M8's grep for 'SERVER_PORT' finds nothing
-    if '"SERVER_PORT"' not in content and "'SERVER_PORT'" not in content:
-        print("  WARNING: SERVER_PORT config key not found in app/__init__.py.")
+    target = 'app.config["SERVER_PORT"] = 5000'
+    if target not in content:
+        print("  WARNING: Injection target not found in app/__init__.py.")
+        print("  Expected: app.config[\"SERVER_PORT\"] = 5000")
         return False
 
+    # Rename SERVER_PORT -> INJECTED_MISSING_PORT so grep -q 'SERVER_PORT' fails
     injected = content.replace(
-        'app.config["SERVER_PORT"] = 5000',
-        '# INJECTED E8b: SERVER_PORT removed to trigger M8 config validation failure\n'
-        '    # app.config["SERVER_PORT"] = 5000'
+        target,
+        '# INJECTED E8b: port config key renamed — M8 gate will fail\n'
+        '    app.config["INJECTED_MISSING_PORT"] = 5000'
     )
 
-    if injected == content:
-        print("  WARNING: Injection target not found. File may have changed.")
-        return False
-
     write_file(FLASK_APP_INIT, injected)
-    print("  Injected: SERVER_PORT config key commented out in app/__init__.py")
-    print("  Expected error: M8 FAILURE: Required config key 'SERVER_PORT' missing")
+    print("  Injected: SERVER_PORT renamed to INJECTED_MISSING_PORT in app/__init__.py")
+    print("  Expected error: M8 FAILURE: Required config key 'SERVER_PORT' missing from app/__init__.py")
     return True
 
 
