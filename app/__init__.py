@@ -1,5 +1,3 @@
-# INJECTED E8c: Missing dependency to simulate infrastructure failure
-import nonexistent_infrastructure_module_xyz  # ModuleNotFoundError: No module named nonexistent_infrastructure_module_xyz
 import sqlite3
 import os
 from flask import Flask, g
