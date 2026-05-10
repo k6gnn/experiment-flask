@@ -2,3 +2,4 @@ experiment_id,run_number,platform,injection_type,conclusion,mttr_seconds,started
 E8,1,github,flaky_flask,success,170,2026-05-10T17:11:32Z,2026-05-10T17:14:29.592942+00:00,,medium,https://github.com/k6gnn/experiment-flask/actions/runs/25634760353
 E8,2,github,flaky_flask,success,157,2026-05-10T17:14:56Z,2026-05-10T17:17:48.493041+00:00,,medium,https://github.com/k6gnn/experiment-flask/actions/runs/25634833002
 E8,3,github,flaky_flask,success,160,2026-05-10T17:18:15Z,2026-05-10T17:21:07.560236+00:00,,medium,https://github.com/k6gnn/experiment-flask/actions/runs/25634902018
+E8b,1,github,config_flask,success,142,2026-05-10T17:21:34Z,2026-05-10T17:24:11.022416+00:00,,medium,https://github.com/k6gnn/experiment-flask/actions/runs/25634972529
