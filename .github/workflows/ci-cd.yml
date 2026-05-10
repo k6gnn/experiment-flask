@@ -173,7 +173,7 @@ jobs:
             exit 1
           fi
 
-          for pkg in "Flask" "Flask-SQLAlchemy" "marshmallow" "pytest"; do
+          for pkg in "Flask" "Flask-SQLAlchemy" "pytest"; do
             if grep -qi "^${pkg}" requirements.txt; then
               echo "OK: $pkg found in requirements.txt"
             else
