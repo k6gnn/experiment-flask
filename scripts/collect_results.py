@@ -72,12 +72,16 @@ if _env_path.exists():
     print(f"  Loaded environment from {_env_path}")
 
 # ─── Configuration ────────────────────────────────────────────────────────────
+# These defaults are for the Java grade-management repo.
+# For Flask E8/E8b/E8c experiments pass --repo experiment-flask on the CLI
+# (or set GITHUB_REPO env var). run_experiment.ps1 does this automatically
+# when the injection type contains 'flask'.
 
 GITHUB_OWNER   = "k6gnn"
-GITHUB_REPO    = "grade-management"
+GITHUB_REPO    = os.environ.get("GITHUB_REPO", "grade-management")
 
 GITLAB_USER    = "kananbadalov6"
-GITLAB_PROJECT = "grade-management"          # adjust if your GitLab project name differs
+GITLAB_PROJECT = "grade-management"
 
 JENKINS_URL    = "http://localhost:8081"
 JENKINS_USER   = "k6gnn"
@@ -205,11 +209,15 @@ def collect_github(experiment_id: str, run_number: int, injection_type: str, com
                     filename = Path(member).name
                     if not filename:
                         continue
-                    # Surefire reports go into a subdirectory
+                    # Surefire XML reports go into surefire_reports/
+                    # pytest junit.xml lands directly in the run dir
                     if "surefire" in member.lower():
                         surefire_dir = out / "surefire_reports"
                         surefire_dir.mkdir(exist_ok=True)
                         target = surefire_dir / filename
+                    elif filename == "junit.xml":
+                        # pytest JUnit report — save alongside surefire for consistency
+                        target = out / "junit.xml"
                     else:
                         target = out / filename
                     with z.open(member) as src, open(target, "wb") as dst:
@@ -452,6 +460,9 @@ def collect_jenkins(experiment_id: str, run_number: int, injection_type: str, co
                         surefire_dir = out / "surefire_reports"
                         surefire_dir.mkdir(exist_ok=True)
                         target = surefire_dir / filename
+                    elif filename == "junit.xml":
+                        # pytest JUnit report — save alongside surefire for consistency
+                        target = out / "junit.xml"
                     else:
                         target = out / filename
                     with z.open(member) as src, open(target, "wb") as dst:
@@ -661,15 +672,29 @@ COLLECTORS = {
 
 def main():
     parser = argparse.ArgumentParser(description="Collect CI/CD experiment results")
-    parser.add_argument("experiment_id",  help="e.g. E1, E2, E5b, E13")
+    parser.add_argument("experiment_id",  help="e.g. E1, E2, E5b, E8, E8b, E8c, E13")
     parser.add_argument("run_number",     type=int, help="Run number (1-5)")
     parser.add_argument("platform",       help="github | gitlab | jenkins | all")
-    parser.add_argument("injection_type", help="e.g. compilation, test, flaky")
+    parser.add_argument("injection_type", help="e.g. compilation, test, flaky, flaky_flask")
     parser.add_argument("--no-wait",      action="store_true",
                         help="Skip waiting for pipeline — collect immediately")
     parser.add_argument("--commit",       default=None,
                         help="Commit SHA of the inject commit (recommended — prevents collecting wrong run)")
+    parser.add_argument("--repo",         default=None,
+                        help="GitHub repo name override (default: grade-management). "
+                             "Use 'experiment-flask' for E8/E8b/E8c Flask experiments.")
     args = parser.parse_args()
+
+    # Auto-detect Flask experiments from injection type if --repo not specified
+    global GITHUB_REPO
+    if args.repo:
+        os.environ["GITHUB_REPO"] = args.repo
+        GITHUB_REPO = args.repo
+        print(f"  Using GitHub repo: {GITHUB_REPO}")
+    elif any(x in args.injection_type for x in ("flask", "Flask")):
+        os.environ["GITHUB_REPO"] = "experiment-flask"
+        GITHUB_REPO = "experiment-flask"
+        print(f"  Auto-detected Flask experiment — using repo: {GITHUB_REPO}")
 
     platforms = list(COLLECTORS.keys()) if args.platform == "all" else [args.platform]
 

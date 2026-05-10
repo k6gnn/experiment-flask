@@ -64,7 +64,16 @@ Write-Host "  Inject commit SHA: $InjectSHA"
 # Step 4: Collect results
 Write-Host ""
 Write-Host "[4/6] Waiting for pipeline and collecting results..."
-python $COLLECT_SCRIPT $ExperimentId $RunNumber $Platform $InjectionType --commit $InjectSHA
+
+# Auto-detect Flask experiments and pass the correct GitHub repo.
+# Flask injection types contain 'flask' — they run against experiment-flask, not grade-management.
+$CollectArgs = @($ExperimentId, $RunNumber, $Platform, $InjectionType, "--commit", $InjectSHA)
+if ($InjectionType -match "flask") {
+    $CollectArgs += @("--repo", "experiment-flask")
+    Write-Host "  Flask experiment detected — collecting from repo: experiment-flask"
+}
+
+python $COLLECT_SCRIPT @CollectArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: Collection had errors - check output above."
 }
